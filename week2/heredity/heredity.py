@@ -63,7 +63,7 @@ def main():
     # Loop over all sets of people who might have the trait
     names = set(people)
     for have_trait in powerset(names):
-
+        
         # Check if current set of people violates known information
         fails_evidence = any(
             (people[person]["trait"] is not None and
@@ -79,8 +79,6 @@ def main():
 
                 # Update probabilities with new joint probability
                 p = joint_probability(people, one_gene, two_genes, have_trait)
-                print(one_gene, two_genes, have_trait)
-                print(p)
                 update(probabilities, one_gene, two_genes, have_trait, p)
 
     # Ensure probabilities sum to 1
@@ -141,69 +139,77 @@ def joint_probability(people, one_gene, two_genes, have_trait):
         * everyone in set `have_trait` has the trait, and
         * everyone not in set` have_trait` does not have the trait.
     """
-    p = {}
-    pool = people.copy()
+
+    """
+    Go through every person in people and calculate the probability that they have x genes and
+    have_trait. Update the joint_prob number by multiplying joint_prob with the calculated probability
+
+    If the person has no mother and father, then the person probability is just P(gene ^ trait) = P(gene) * P(trait | gene)
+
+    Else if the person has a mother and father, then the person probability is dependant on the mother and father
+    The probability that mother and father pass down the gene is only dependant on how many genes they have
+    - calculate P(person inheriting from mother) and P(person inheriting from father)
+    - calculate P(person having x genes)
+    - multiply this by P(trait | x genes)
+    - result is P(gene ^ trait) which is used in the joint probability
+
+    """
+    joint_prob = 1
+
+    for person in people:
+
+        mother = people[person]["mother"]
+        father = people[person]["father"]
+
+        # Put person genes, traits, and probability into variables
+        person_prob = 1
+        if person in two_genes:
+            person_genes = 2
+        elif person in one_gene:
+            person_genes = 1
+        else:
+            person_genes = 0
+        person_trait = person in have_trait
 
 
-    # algorithm that runs until pool is empty:
-    # checks if we can deduce somethjing -> if can then delete from pool
-    # we can use that deduction to get probabilities of future ones
-    for person in pool.copy():
-        if pool[person]["trait"] == None:
-            pool[person]["trait"] = False
+        if not mother and not father:
+            # P(gene ^ trait) = P(gene) * P(trait | gene)
+            # the P(trait | gene) is inculded later
+            person_prob *= PROBS["gene"][person_genes]
 
-    while pool:
-        for person in pool.copy():
+        else:
 
-            if pool[person]["mother"] == None and pool[person]["father"] == None:
-                if person in one_gene:
-                    p[person] = PROBS["gene"][1] * PROBS["trait"][1][pool[person]["trait"]]
-                elif person in two_genes:
-                    p[person] = PROBS["gene"][2] * PROBS["trait"][2][pool[person]["trait"]]
-                else:
-                    p[person] = PROBS["gene"][0] * PROBS["trait"][0][pool[person]["trait"]]
-
-                del pool[person]
-
-            # Skip over cases where we don't have enough information to get a probability
-            elif (pool[person]["mother"] or pool[person]["father"]) and not (pool[person]["mother"] and pool[person]["father"]):
-                continue
-
+            # Get the probability of mother passing down the gene
+            if mother in two_genes:
+                mother_prob =  1- PROBS["mutation"]
+            elif mother in one_gene:
+                mother_prob = 0.5
             else:
-                # Probability of mother passing the gene
-                if pool[person]["mother"] in one_gene:
-                    p_mother = 0.5# - PROBS["mutation"]
-                elif pool[person]["mother"] in two_genes:
-                    p_mother = 1 - PROBS["mutation"]
-                else:
-                    p_mother = PROBS["mutation"]
+                mother_prob = PROBS["mutation"]
 
+            # Get the probability of father passing down the gene
+            if father in two_genes:
+                father_prob =  1- PROBS["mutation"]
+            elif father in one_gene:
+                father_prob = 0.5
+            else:
+                father_prob = PROBS["mutation"]
 
-                # Probability of father passing the gene
-                if pool[person]["father"] in one_gene:
-                        p_father = 0.5# - PROBS["mutation"]
-                elif pool[person]["father"] in two_genes:
-                    p_father = 1 - PROBS["mutation"]
-                else:
-                    p_father = PROBS["mutation"]             
+            # Calculate all ways to get the correct number of genes for the person
+            if person_genes == 2:
+                person_prob *= mother_prob * father_prob
+            elif person_genes == 1:
+                # Person can get the no gene from mother and 1 gene from father and vice versa
+                person_prob *= ((1 - mother_prob) * father_prob) + ((1 - father_prob) * mother_prob)
+            else:
+                person_prob *= (1 - mother_prob) * (1 - father_prob)
 
+        # P(gene ^ trait) = P(gene) * P(trait | gene)
+        person_prob *= PROBS["trait"][person_genes][person_trait]
 
-                if person in one_gene:
-                    # Either person gets gene from mother but not father or vice versa
-                    p[person] = (p_mother * (1 - p_father) + (1 - p_mother) * p_father) * PROBS["trait"][1][people[person]["trait"]]
-                elif person in two_genes:
-                    p[person] = (p_mother * p_father) * PROBS["trait"][2][people[person]["trait"]]
-                else:
-                    p[person] = ((1 - p_mother) * (1 - p_father)) * PROBS["trait"][0][people[person]["trait"]]
+        joint_prob *= person_prob
 
-
-                del pool[person]
-
-    joint_p = 1             
-    for person in p:
-        joint_p *= p[person]
-
-    return joint_p
+    return joint_prob
 
 
 def update(probabilities, one_gene, two_genes, have_trait, p):
@@ -237,14 +243,15 @@ def normalize(probabilities):
     """
     for person in probabilities:
 
-        gene_total = sum(probabilities[person]['gene'].values())
-        trait_total = sum(probabilities[person]['trait'].values())
+        # The alpha value to be multiplied by to normalize the values
+        gene_alpha = 1 / sum(probabilities[person]['gene'].values())
+        trait_alpha = 1 / sum(probabilities[person]['trait'].values())
 
         for i in range(3):
-            probabilities[person]['gene'][i] = probabilities[person]['gene'][i] / gene_total
+            probabilities[person]['gene'][i] = probabilities[person]['gene'][i] * gene_alpha
         
         for i in range(2):
-            probabilities[person]['trait'][i] = probabilities[person]['trait'][i] / 1
+            probabilities[person]['trait'][i] = probabilities[person]['trait'][i] * trait_alpha
 
 if __name__ == "__main__":
     main()
